@@ -1,210 +1,84 @@
-# Détection Précoce de la Maladie d'Alzheimer via Deep Learning
+# Classification des stades d'Alzheimer à partir d'IRM
 
-## Description
+Classifieur d'images qui range une IRM cérébrale dans l'un de quatre stades. Le script télécharge un jeu public, entraîne un ou plusieurs modèles, puis mesure la performance sur un jeu de test jamais utilisé pour choisir le meilleur epoch.
 
-Ce projet présente une analyse complète des méthodes de Deep Learning pour le diagnostic précoce de la maladie d'Alzheimer à partir d'imagerie médicale. Il implémente et compare différentes architectures neuronales (CNN, RNN, Transfer Learning) pour atteindre des précisions élevées sur des bases de données standards d'imagerie médicale.
+Ce dépôt est une démonstration technique. Il ne constitue pas un outil de diagnostic.
 
-## Objectifs
+## Classes
 
-- Analyser les méthodes de Deep Learning (classification, segmentation et extraction de caractéristiques) pour le diagnostic précoce d'Alzheimer
-- Évaluer comparativement les architectures neuronales (CNN, RNN, Transfer Learning)
-- Identifier les limitations actuelles (déséquilibre de classes, prétraitement)
-- Atteindre des précisions élevées (96-98%) sur des bases de données standards
+Le jeu [Alzheimer's Multiclass Dataset (equal and augmented)](https://www.kaggle.com/datasets/aryansinghal10/alzheimers-multiclass-dataset-equal-and-augmented) contient environ 44 000 IRM, déjà augmentées et rééquilibrées :
 
-## Technologies Utilisées
+| Classe | Stade |
+| --- | --- |
+| NonDemented | Pas de démence |
+| VeryMildDemented | Démence très légère |
+| MildDemented | Démence légère |
+| ModerateDemented | Démence modérée |
 
-- **Python** : Langage de programmation principal
-- **Deep Learning** : 
-  - CNN (Convolutional Neural Networks)
-  - RNN (Recurrent Neural Networks) - LSTM, GRU
-  - Transfer Learning (VGG16, ResNet50, InceptionV3, DenseNet121)
-- **Computer Vision** : Traitement et analyse d'images médicales
-- **Image Segmentation** : U-Net, SegNet, Attention U-Net
-- **Medical Imaging** : Support pour MRI et PET scans
-- **Data Preprocessing** : Normalisation, augmentation, gestion du déséquilibre de classes
-- **Datasets** : Compatible avec ADNI, OASIS, Kaggle
+## Méthode
 
-## Structure du Projet
+1. Téléchargement du jeu avec `kagglehub`.
+2. Lecture des images depuis le disque, redimensionnement en 224×224 et normalisation entre 0 et 1.
+3. Découpage stratifié **70 % train / 15 % validation / 15 % test**, avant tout entraînement.
+4. Entraînement avec early stopping, baisse du learning rate et sauvegarde du meilleur modèle selon la validation.
+5. Poids de classes calculés sur le train seulement.
+6. Métriques finales (accuracy, précision, rappel, F1, AUC) calculées une seule fois sur le test.
 
-```
-Alzheimer/
-├── data/
-│   ├── raw/              # Données brutes
-│   └── processed/        # Données prétraitées
-├── models/
-│   ├── cnn_models.py     # Architectures CNN
-│   ├── transfer_learning.py  # Modèles de transfer learning
-│   ├── rnn_models.py     # Modèles RNN
-│   ├── segmentation_models.py  # Modèles de segmentation
-│   └── saved_models/     # Modèles sauvegardés
-├── results/
-│   ├── figures/          # Graphiques et visualisations
-│   └── reports/          # Rapports et métriques
-├── logs/                 # Logs TensorBoard
-├── data_preprocessing.py # Module de prétraitement
-├── training.py           # Module d'entraînement
-├── evaluation.py         # Module d'évaluation
-├── utils.py              # Utilitaires
-├── main.py               # Script principal
-├── requirements.txt      # Dépendances
-└── README.md            # Documentation
-```
+L'expérience de référence compare `SimpleCNN`, entraîné depuis zéro, et `ResNet50` pré-entraîné sur ImageNet.
 
-## Installation
+## Lancer le projet
 
-1. Cloner le repository ou télécharger les fichiers
-
-2. Installer les dépendances :
 ```bash
 pip install -r requirements.txt
+python main.py --models SimpleCNN,ResNet50 --epochs 15
 ```
 
-3. Créer la structure de dossiers (automatique lors de l'exécution) :
-```bash
-python main.py
-```
+`python main.py` entraîne seulement `SimpleCNN`. Les autres choix sont `AdvancedCNN`, `MultiScaleCNN` et `VGG16`.
 
-## Utilisation
+Le premier lancement télécharge environ 400 Mo. Le jeu reste dans le cache local de `kagglehub`, il n'est pas versionné.
 
-### Entraînement des modèles de classification
+| Option | Défaut | Rôle |
+| --- | --- | --- |
+| `--models` | `SimpleCNN` | Modèles séparés par des virgules, ou `all` |
+| `--epochs` | `15` | Nombre maximal d'époques |
+| `--patience` | `5` | Patience de l'early stopping |
+| `--batch-size` | `32` | Taille de batch |
+| `--image-size` | `224` | Côté de l'image |
+| `--seed` | `42` | Graine du découpage |
+| `--max-per-class` | tout le jeu | Limite pour un essai rapide |
 
-```bash
-python main.py --mode classification
-```
-
-### Entraînement des modèles de segmentation
-
-```bash
-python main.py --mode segmentation
-```
-
-### Entraînement des deux types de modèles
-
-```bash
-python main.py --mode both
-```
-
-### Options disponibles
-
-- `--mode` : Mode d'entraînement (`classification`, `segmentation`, `both`)
-- `--seed` : Graine aléatoire pour la reproductibilité (défaut: 42)
-- `--data-dir` : Répertoire contenant les données (défaut: `data/raw`)
-
-## Architectures Implémentées
-
-### Classification
-
-1. **SimpleCNN** : Architecture CNN basique avec plusieurs couches convolutionnelles
-2. **AdvancedCNN** : CNN avec blocs résiduels pour une meilleure performance
-3. **MultiScaleCNN** : CNN avec extraction de caractéristiques multi-échelle
-4. **VGG16** : Transfer learning avec VGG16 pré-entraîné sur ImageNet
-5. **ResNet50** : Transfer learning avec ResNet50 pré-entraîné
-6. **InceptionV3** : Transfer learning avec InceptionV3
-7. **DenseNet121** : Transfer learning avec DenseNet121
-8. **Ensemble** : Modèle combinant plusieurs architectures
-
-### Segmentation
-
-1. **U-Net** : Architecture classique pour la segmentation d'images médicales
-2. **SegNet** : Architecture avec encodeur-décodeur symétrique
-3. **Attention U-Net** : U-Net amélioré avec mécanisme d'attention
-
-### RNN
-
-1. **LSTM** : Réseau LSTM pour l'analyse de séquences temporelles
-2. **GRU** : Réseau GRU, variante plus légère de LSTM
-3. **Bidirectional LSTM** : LSTM bidirectionnel
-4. **CNN-LSTM** : Modèle hybride combinant CNN et LSTM
-
-## Prétraitement des Données
-
-Le module `data_preprocessing.py` offre :
-
-- Chargement de fichiers NIfTI (format standard pour MRI/PET)
-- Extraction de coupes 2D depuis volumes 3D
-- Normalisation d'intensité
-- Filtrage gaussien pour réduction du bruit
-- Égalisation d'histogramme
-- Redimensionnement des images
-- Augmentation de données (rotation, zoom, flip)
-- Gestion du déséquilibre de classes (SMOTE, undersampling, oversampling)
-
-## Évaluation
-
-Le module `evaluation.py` calcule :
-
-- Accuracy, Precision, Recall, F1-Score
-- Matrice de confusion
-- Courbes ROC et AUC
-- Courbes Precision-Recall
-- Métriques de segmentation (IoU, Dice Score)
-- Comparaison de modèles multiples
-
-## Entraînement
-
-Le module `training.py` fournit :
-
-- Entraînement avec callbacks (Early Stopping, Model Checkpoint, Reduce LR)
-- Fine-tuning pour les modèles de transfer learning
-- Gestion des poids de classes pour le déséquilibre
-- Augmentation de données pendant l'entraînement
-- Support TensorBoard pour la visualisation
-- Sauvegarde automatique des meilleurs modèles
+Les courbes d'entraînement se lisent avec `tensorboard --logdir=logs/`.
 
 ## Résultats
 
-Les résultats sont sauvegardés dans :
+Après l'entraînement, les fichiers locaux sont :
 
-- `models/saved_models/` : Modèles entraînés (format .h5)
-- `results/reports/` : Métriques et rapports (JSON)
-- `results/figures/` : Graphiques et visualisations (PNG)
-- `logs/` : Logs TensorBoard pour visualisation interactive
+- `results/reports/all_results.json` — métriques de test
+- `results/figures/` — matrice de confusion et comparaison des modèles
+- `models/saved_models/` — poids du meilleur epoch
 
-## Visualisation avec TensorBoard
+Ces fichiers ne sont pas dans git : ils se régénèrent en relançant le script.
 
-Pour visualiser les courbes d'entraînement :
+## Limite
 
-```bash
-tensorboard --logdir=logs/
+Le jeu ne fournit pas d'identifiant patient, et les images sont déjà augmentées. Une IRM et sa copie peuvent donc se trouver à la fois dans l'entraînement et dans le test. Les scores sont plus élevés que sur des patients réellement nouveaux.
+
+## Structure
+
+```
+main.py                  expérience (chargement, entraînement, test)
+data_loader.py           téléchargement Kaggle et découpage
+training.py              entraînement et callbacks
+evaluation.py            métriques et figures
+models/cnn_models.py     CNN entraînés depuis zéro
+models/transfer_learning.py
+example_usage.py         essai court sur un petit échantillon
 ```
 
-Puis ouvrir http://localhost:6006 dans votre navigateur.
+## Stack
 
-## Classes de Diagnostic
-
-Le modèle classifie les images en 4 catégories :
-
-- **CN** (Cognitively Normal) : Sujet sain
-- **MCI** (Mild Cognitive Impairment) : Déficience cognitive légère
-- **AD** (Alzheimer's Disease) : Maladie d'Alzheimer
-- **EMCI** (Early Mild Cognitive Impairment) : Déficience cognitive légère précoce
-
-## Limitations et Défis
-
-1. **Déséquilibre de classes** : Géré via SMOTE, class weights, et techniques d'échantillonnage
-2. **Prétraitement** : Normalisation et filtrage essentiels pour les images médicales
-3. **Taille des données** : Augmentation de données pour augmenter la taille du dataset
-4. **Interprétabilité** : Les modèles de deep learning nécessitent des techniques d'interprétation
-
-## Améliorations Futures
-
-- Implémentation de modèles d'attention avancés
-- Intégration de données multi-modales (MRI + PET)
-- Techniques d'explication (Grad-CAM, SHAP)
-- Optimisation hyperparamètres automatisée
-- Déploiement en production avec API REST
-
-## Références
-
-- ADNI (Alzheimer's Disease Neuroimaging Initiative)
-- OASIS (Open Access Series of Imaging Studies)
-- Kaggle Alzheimer's Dataset
-
-## Auteur
-
-Projet de détection précoce de la maladie d'Alzheimer via Deep Learning
+Python, TensorFlow / Keras, scikit-learn, kagglehub.
 
 ## Licence
 
-Ce projet est fourni à des fins éducatives et de recherche.
-
+Projet fourni à des fins éducatives et de démonstration.

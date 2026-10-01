@@ -1,316 +1,264 @@
 """
-Script principal pour la détection précoce de la maladie d'Alzheimer
-via Deep Learning
+Détection des stades d'Alzheimer à partir d'IRM.
+
+Le script télécharge le jeu Kaggle
+aryansinghal10/alzheimers-multiclass-dataset-equal-and-augmented,
+puis entraîne et compare des modèles de classification.
+Les métriques finales sont calculées sur un jeu de test jamais utilisé
+pour l'entraînement ni pour le choix du meilleur epoch.
 """
 
-import numpy as np
-import os
 import argparse
-from sklearn.model_selection import train_test_split
-from typing import Dict, List
+import os
 
-from data_preprocessing import MedicalImagePreprocessor
-from models.cnn_models import SimpleCNN, AdvancedCNN, MultiScaleCNN, compile_model
-from models.transfer_learning import TransferLearningModel, compile_transfer_model
-from models.rnn_models import LSTMClassifier, GRUClassifier, BidirectionalLSTM, compile_rnn_model
-from models.segmentation_models import UNet, SegNet, AttentionUNet, compile_segmentation_model
-from training import ModelTrainer, calculate_class_weights, train_multiple_models
-from evaluation import ModelEvaluator
-from utils import (
-    create_directories, save_results, get_class_names,
-    print_model_summary, set_seed
+import matplotlib
+matplotlib.use("Agg")
+
+import numpy as np
+
+from data_loader import (
+    CLASS_NAMES,
+    collect_samples,
+    download_dataset,
+    find_image_root,
+    make_dataset,
+    split_samples,
 )
+from evaluation import ModelEvaluator
+from models.cnn_models import AdvancedCNN, MultiScaleCNN, SimpleCNN, compile_model
+from models.transfer_learning import TransferLearningModel, compile_transfer_model
+from training import ModelTrainer, calculate_class_weights
+from utils import create_directories, get_class_names, print_model_summary, save_results, set_seed
+
+MODEL_CHOICES = ["SimpleCNN", "AdvancedCNN", "MultiScaleCNN", "VGG16", "ResNet50"]
 
 
-def load_sample_data(num_samples: int = 1000, image_shape: tuple = (224, 224, 1)):
-    """
-    Charge des données d'exemple pour la démonstration
-    
-    Args:
-        num_samples: Nombre d'échantillons
-        image_shape: Forme des images
-        
-    Returns:
-        Tuple (X, y) - données et labels
-    """
-    print(f"Génération de {num_samples} échantillons d'exemple...")
-    
-    X = np.random.rand(num_samples, *image_shape).astype(np.float32)
-    y = np.random.randint(0, 4, size=num_samples)
-    
-    return X, y
+def build_model(name: str, input_shape, num_classes):
+    """Construit et compile l'architecture demandée."""
+    if name == "SimpleCNN":
+        return compile_model(SimpleCNN.build(input_shape, num_classes))
+    if name == "AdvancedCNN":
+        return compile_model(AdvancedCNN.build(input_shape, num_classes))
+    if name == "MultiScaleCNN":
+        return compile_model(MultiScaleCNN.build(input_shape, num_classes))
+    if name == "VGG16":
+        return compile_transfer_model(
+            TransferLearningModel.build_vgg16(input_shape, num_classes)
+        )
+    if name == "ResNet50":
+        return compile_transfer_model(
+            TransferLearningModel.build_resnet50(input_shape, num_classes)
+        )
+    raise ValueError(f"Modèle inconnu: {name}. Choix: {', '.join(MODEL_CHOICES)}.")
 
 
-def train_classification_models(X_train, y_train, X_val, y_val, input_shape):
-    """
-    Entraîne différents modèles de classification
-    
-    Args:
-        X_train: Données d'entraînement
-        y_train: Labels d'entraînement
-        X_val: Données de validation
-        y_val: Labels de validation
-        input_shape: Forme des images d'entrée
-        
-    Returns:
-        Dictionnaire des résultats
-    """
+def evaluate_on_test(model, test_ds, class_names, model_name):
+    """Évalue le modèle restauré (meilleur epoch) sur le jeu de test."""
+    y_true = []
+    y_prob_parts = []
+    for images, labels in test_ds:
+        y_true.append(labels.numpy())
+        y_prob_parts.append(model.predict(images, verbose=0))
+
+    y_true = np.concatenate(y_true)
+    y_prob = np.concatenate(y_prob_parts)
+    y_pred = y_prob.argmax(axis=1)
+
+    evaluator = ModelEvaluator(class_names)
+    metrics = evaluator.calculate_metrics(y_true, y_pred, y_prob)
+    evaluator.plot_confusion_matrix(
+        y_true,
+        y_pred,
+        save_path=f"results/figures/{model_name}_confusion_matrix.png",
+        title=f"Matrice de confusion — {model_name}",
+    )
+    return {key: float(value) for key, value in metrics.items()}
+
+
+def train_classification_models(
+    train_ds,
+    val_ds,
+    test_ds,
+    y_train,
+    input_shape,
+    model_names,
+    epochs,
+    patience,
+):
+    """Entraîne les modèles choisis et les évalue sur le test."""
     results = {}
-    num_classes = len(np.unique(y_train))
-    
-    models_config = [
-        {
-            'name': 'SimpleCNN',
-            'model': compile_model(SimpleCNN.build(input_shape, num_classes))
-        },
-        {
-            'name': 'AdvancedCNN',
-            'model': compile_model(AdvancedCNN.build(input_shape, num_classes))
-        },
-        {
-            'name': 'MultiScaleCNN',
-            'model': compile_model(MultiScaleCNN.build(input_shape, num_classes))
-        },
-        {
-            'name': 'VGG16',
-            'model': compile_transfer_model(
-                TransferLearningModel.build_vgg16(input_shape, num_classes)
-            )
-        },
-        {
-            'name': 'ResNet50',
-            'model': compile_transfer_model(
-                TransferLearningModel.build_resnet50(input_shape, num_classes)
-            )
-        }
-    ]
-    
+    class_names = get_class_names()
+    num_classes = len(class_names)
     class_weights = calculate_class_weights(y_train)
-    
-    for config in models_config:
-        model_name = config['name']
-        model = config['model']
-        
-        print(f"\n{'='*60}")
+    print(f"Poids de classes (train uniquement): {class_weights}")
+
+    for model_name in model_names:
+        print(f"\n{'=' * 60}")
         print(f"Entraînement de {model_name}")
-        print(f"{'='*60}")
-        
+        print(f"{'=' * 60}")
+
+        model = build_model(model_name, input_shape, num_classes)
         print_model_summary(model)
-        
+
         trainer = ModelTrainer(model, model_name)
         history = trainer.train(
-            X_train, y_train, X_val, y_val,
-            batch_size=32,
-            epochs=50,
+            train_ds,
+            X_val=val_ds,
+            epochs=epochs,
             class_weights=class_weights,
-            use_data_augmentation=True
+            patience=patience,
         )
-        
         trainer.save_model()
-        
-        y_pred = model.predict(X_val).argmax(axis=1)
-        y_pred_proba = model.predict(X_val)
-        
-        evaluator = ModelEvaluator(get_class_names())
-        metrics = evaluator.calculate_metrics(y_val, y_pred, y_pred_proba)
-        
+
+        metrics = evaluate_on_test(model, test_ds, class_names, model_name)
         results[model_name] = {
-            'history': history,
-            'metrics': metrics,
-            'model': model
+            "history": {key: [float(value) for value in values] for key, values in history.items()},
+            "metrics": metrics,
         }
-        
-        print(f"\nMétriques pour {model_name}:")
+
+        print(f"\nMétriques de test pour {model_name}:")
         for metric, value in metrics.items():
             print(f"  {metric}: {value:.4f}")
-    
+
     return results
 
 
-def train_segmentation_models(X_train, y_train, X_val, y_val, input_shape):
-    """
-    Entraîne des modèles de segmentation
-    
-    Args:
-        X_train: Données d'entraînement
-        y_train: Masques d'entraînement
-        X_val: Données de validation
-        y_val: Masques de validation
-        input_shape: Forme des images d'entrée
-        
-    Returns:
-        Dictionnaire des résultats
-    """
-    results = {}
-    
-    segmentation_models = [
-        ('UNet', UNet),
-        ('SegNet', SegNet),
-        ('AttentionUNet', AttentionUNet)
-    ]
-    
-    for model_name, model_class in segmentation_models:
-        print(f"\n{'='*60}")
-        print(f"Entraînement de {model_name}")
-        print(f"{'='*60}")
-        
-        model = compile_segmentation_model(
-            model_class.build(input_shape, num_classes=1),
-            num_classes=1
-        )
-        
-        print_model_summary(model)
-        
-        trainer = ModelTrainer(model, f'{model_name}_segmentation')
-        history = trainer.train(
-            X_train, y_train, X_val, y_val,
-            batch_size=16,
-            epochs=30
-        )
-        
-        trainer.save_model()
-        
-        y_pred = (model.predict(X_val) > 0.5).astype(np.uint8)
-        
-        evaluator = ModelEvaluator()
-        seg_metrics = evaluator.evaluate_segmentation(y_val, y_pred)
-        
-        results[model_name] = {
-            'history': history,
-            'metrics': seg_metrics,
-            'model': model
-        }
-        
-        print(f"\nMétriques de segmentation pour {model_name}:")
-        for metric, value in seg_metrics.items():
-            print(f"  {metric}: {value:.4f}")
-    
-    return results
+def compare_all_models(results):
+    """Compare les métriques de test des modèles entraînés."""
+    print("\n" + "=" * 60)
+    print("COMPARAISON DES MODÈLES (JEU DE TEST)")
+    print("=" * 60)
 
+    metrics_dict = {
+        model_name: result["metrics"]
+        for model_name, result in results.items()
+        if "metrics" in result
+    }
 
-def compare_all_models(results: Dict):
-    """
-    Compare tous les modèles entraînés
-    
-    Args:
-        results: Dictionnaire des résultats
-    """
-    print("\n" + "="*60)
-    print("COMPARAISON DES MODÈLES")
-    print("="*60)
-    
-    metrics_dict = {}
-    for model_name, result in results.items():
-        if 'metrics' in result:
-            metrics_dict[model_name] = result['metrics']
-    
     evaluator = ModelEvaluator(get_class_names())
-    evaluator.compare_models(metrics_dict, save_path='results/figures/model_comparison.png')
-    
-    print("\nRésumé des performances:")
-    print("-" * 60)
-    print(f"{'Modèle':<20} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
-    print("-" * 60)
-    
+    evaluator.compare_models(metrics_dict, save_path="results/figures/model_comparison.png")
+
+    print(f"\n{'Modèle':<20} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
+    print("-" * 68)
     for model_name, metrics in metrics_dict.items():
-        print(f"{model_name:<20} "
-              f"{metrics.get('accuracy', 0):<12.4f} "
-              f"{metrics.get('precision', 0):<12.4f} "
-              f"{metrics.get('recall', 0):<12.4f} "
-              f"{metrics.get('f1_score', 0):<12.4f}")
+        print(
+            f"{model_name:<20} "
+            f"{metrics.get('accuracy', 0):<12.4f} "
+            f"{metrics.get('precision', 0):<12.4f} "
+            f"{metrics.get('recall', 0):<12.4f} "
+            f"{metrics.get('f1_score', 0):<12.4f}"
+        )
 
 
 def main():
-    """
-    Fonction principale
-    """
-    parser = argparse.ArgumentParser(description='Détection précoce de la maladie d\'Alzheimer')
-    parser.add_argument('--mode', type=str, default='classification',
-                       choices=['classification', 'segmentation', 'both'],
-                       help='Mode d\'entraînement')
-    parser.add_argument('--seed', type=int, default=42, help='Graine aléatoire')
-    parser.add_argument('--data-dir', type=str, default='data/raw',
-                       help='Répertoire des données')
-    
+    parser = argparse.ArgumentParser(
+        description="Classification des stades d'Alzheimer sur IRM (jeu Kaggle augmenté)"
+    )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default="SimpleCNN",
+        help=(
+            "Modèles séparés par des virgules. "
+            f"Choix: {', '.join(MODEL_CHOICES)}, ou all. Défaut: SimpleCNN."
+        ),
+    )
+    parser.add_argument("--epochs", type=int, default=15, help="Nombre maximal d'époques")
+    parser.add_argument("--patience", type=int, default=5, help="Patience de l'early stopping")
+    parser.add_argument("--batch-size", type=int, default=32, help="Taille de batch")
+    parser.add_argument("--image-size", type=int, default=224, help="Taille des images après redimensionnement")
+    parser.add_argument("--seed", type=int, default=42, help="Graine aléatoire")
+    parser.add_argument(
+        "--max-per-class",
+        type=int,
+        default=None,
+        help="Limite d'images par classe, réservée aux essais rapides",
+    )
     args = parser.parse_args()
-    
+
+    if args.models.strip().lower() == "all":
+        model_names = list(MODEL_CHOICES)
+    else:
+        model_names = [name.strip() for name in args.models.split(",") if name.strip()]
+        unknown = [name for name in model_names if name not in MODEL_CHOICES]
+        if unknown:
+            parser.error(f"Modèles inconnus: {', '.join(unknown)}. Choix: {', '.join(MODEL_CHOICES)}.")
+
     set_seed(args.seed)
     create_directories()
-    
-    print("="*60)
-    print("DÉTECTION PRÉCOCE DE LA MALADIE D'ALZHEIMER")
-    print("via Deep Learning")
-    print("="*60)
-    
-    input_shape = (224, 224, 1)
-    
-    print("\nChargement des données...")
-    X, y = load_sample_data(num_samples=1000, image_shape=input_shape)
-    
-    print("\nPrétraitement des données...")
-    preprocessor = MedicalImagePreprocessor(target_size=(224, 224))
-    X_processed, y_processed = preprocessor.preprocess_batch(
-        [X[i] for i in range(len(X))],
-        y.tolist()
+
+    print("=" * 60)
+    print("CLASSIFICATION DES STADES D'ALZHEIMER")
+    print("Jeu: aryansinghal10/alzheimers-multiclass-dataset-equal-and-augmented")
+    print("Classes:", ", ".join(CLASS_NAMES))
+    print("=" * 60)
+    print(
+        "\nCe jeu est une version déjà augmentée et rééquilibrée. "
+        "Un découpage aléatoire peut placer une image et son augmentation "
+        "des deux côtés du split. Les scores sont donc optimistes par rapport "
+        "à un test sur des patients jamais vus."
     )
-    
-    X_balanced, y_balanced = preprocessor.handle_class_imbalance(
-        X_processed, y_processed, strategy='smote'
+
+    dataset_path = download_dataset()
+    image_root = find_image_root(dataset_path)
+    print(f"Dossier des images: {image_root}")
+
+    print("\nInventaire des images...")
+    paths, labels = collect_samples(
+        image_root,
+        max_per_class=args.max_per_class,
+        seed=args.seed,
     )
-    
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_balanced, y_balanced, test_size=0.2, random_state=42, stratify=y_balanced
+
+    print("\nDécoupage stratifié (70 % train, 15 % validation, 15 % test)...")
+    splits = split_samples(paths, labels, seed=args.seed, test_size=0.15, val_size=0.15)
+
+    input_shape = (args.image_size, args.image_size, 3)
+    train_ds = make_dataset(
+        *splits["train"],
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        shuffle=True,
+        seed=args.seed,
     )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+    val_ds = make_dataset(
+        *splits["val"],
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        shuffle=False,
     )
-    
-    print(f"\nDonnées d'entraînement: {X_train.shape}")
-    print(f"Données de validation: {X_val.shape}")
-    print(f"Données de test: {X_test.shape}")
-    
-    all_results = {}
-    
-    if args.mode in ['classification', 'both']:
-        print("\n" + "="*60)
-        print("ENTRAÎNEMENT DES MODÈLES DE CLASSIFICATION")
-        print("="*60)
-        
-        classification_results = train_classification_models(
-            X_train, y_train, X_val, y_val, input_shape
-        )
-        all_results.update(classification_results)
-    
-    if args.mode in ['segmentation', 'both']:
-        print("\n" + "="*60)
-        print("ENTRAÎNEMENT DES MODÈLES DE SEGMENTATION")
-        print("="*60)
-        
-        y_train_seg = (np.random.rand(*X_train.shape[:3]) > 0.5).astype(np.float32)
-        y_val_seg = (np.random.rand(*X_val.shape[:3]) > 0.5).astype(np.float32)
-        
-        segmentation_results = train_segmentation_models(
-            X_train, y_train_seg, X_val, y_val_seg, input_shape
-        )
-        all_results.update(segmentation_results)
-    
-    if all_results:
-        compare_all_models(all_results)
-        save_results(all_results, 'results/reports/all_results.json')
-        
-        print("\n" + "="*60)
-        print("ENTRAÎNEMENT TERMINÉ")
-        print("="*60)
-        print("\nRésultats sauvegardés dans:")
-        print("  - models/saved_models/ (modèles)")
-        print("  - results/reports/all_results.json (métriques)")
-        print("  - results/figures/ (graphiques)")
-        print("  - logs/ (TensorBoard)")
-    
-    print("\nPour visualiser les résultats avec TensorBoard:")
-    print("  tensorboard --logdir=logs/")
+    test_ds = make_dataset(
+        *splits["test"],
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        shuffle=False,
+    )
+
+    results = train_classification_models(
+        train_ds,
+        val_ds,
+        test_ds,
+        splits["train"][1],
+        input_shape,
+        model_names,
+        epochs=args.epochs,
+        patience=args.patience,
+    )
+
+    compare_all_models(results)
+    os.makedirs("results/reports", exist_ok=True)
+    save_results(results, "results/reports/all_results.json")
+
+    print("\n" + "=" * 60)
+    print("ENTRAÎNEMENT TERMINÉ")
+    print("=" * 60)
+    print("Résultats:")
+    print("  - models/saved_models/ (modèles)")
+    print("  - results/reports/all_results.json (métriques de test)")
+    print("  - results/figures/ (matrices de confusion et comparaison)")
+    print("  - logs/ (TensorBoard)")
+    print("\nVisualisation: tensorboard --logdir=logs/")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

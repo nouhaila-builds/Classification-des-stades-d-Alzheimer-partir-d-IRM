@@ -77,16 +77,17 @@ class ModelTrainer:
         callbacks.append(reduce_lr)
         
         log_dir = os.path.join('logs', self.model_name, datetime.now().strftime('%Y%m%d-%H%M%S'))
-        tensorboard = TensorBoard(log_dir=log_dir, histogram_freq=1)
+        tensorboard = TensorBoard(log_dir=log_dir, histogram_freq=0)
         callbacks.append(tensorboard)
         
         return callbacks
     
-    def train(self, X_train: np.ndarray, y_train: np.ndarray,
-             X_val: np.ndarray, y_val: np.ndarray,
+    def train(self, X_train, y_train: Optional[np.ndarray] = None,
+             X_val=None, y_val: Optional[np.ndarray] = None,
              batch_size: int = 32, epochs: int = 100,
              class_weights: Optional[Dict] = None,
-             use_data_augmentation: bool = False) -> Dict:
+             use_data_augmentation: bool = False,
+             patience: int = 15) -> Dict:
         """
         Entraîne le modèle
         
@@ -103,7 +104,23 @@ class ModelTrainer:
         Returns:
             Historique d'entraînement
         """
-        callbacks = self.create_callbacks()
+        callbacks = self.create_callbacks(patience=patience)
+
+        if isinstance(X_train, tf.data.Dataset):
+            if use_data_augmentation:
+                print(
+                    "Augmentation en mémoire ignorée: le jeu est déjà augmenté "
+                    "et les images sont lues depuis le disque."
+                )
+            self.history = self.model.fit(
+                X_train,
+                validation_data=X_val,
+                epochs=epochs,
+                callbacks=callbacks,
+                class_weight=class_weights,
+                verbose=1
+            )
+            return self.history.history
         
         if use_data_augmentation:
             from tensorflow.keras.preprocessing.image import ImageDataGenerator
@@ -226,7 +243,7 @@ def calculate_class_weights(y: np.ndarray) -> Dict[int, float]:
     
     weights = {}
     for class_idx, count in class_counts.items():
-        weights[class_idx] = total / (n_classes * count)
+        weights[int(class_idx)] = total / (n_classes * count)
     
     return weights
 

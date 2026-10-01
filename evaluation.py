@@ -89,7 +89,7 @@ class ModelEvaluator:
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def plot_roc_curve(self, y_true: np.ndarray, y_pred_proba: np.ndarray,
                       save_path: Optional[str] = None, title: str = 'ROC Curve'):
@@ -149,7 +149,7 @@ class ModelEvaluator:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def plot_precision_recall_curve(self, y_true: np.ndarray, y_pred_proba: np.ndarray,
                                    save_path: Optional[str] = None,
@@ -177,7 +177,7 @@ class ModelEvaluator:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def generate_classification_report(self, y_true: np.ndarray, y_pred: np.ndarray,
                                       save_path: Optional[str] = None) -> str:
@@ -233,7 +233,7 @@ class ModelEvaluator:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def compare_models(self, results: Dict[str, Dict], save_path: Optional[str] = None):
         """
@@ -262,7 +262,7 @@ class ModelEvaluator:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def evaluate_segmentation(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
         """

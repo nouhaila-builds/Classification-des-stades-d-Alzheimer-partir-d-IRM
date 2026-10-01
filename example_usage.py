@@ -1,146 +1,82 @@
 """
-Exemple d'utilisation du projet de détection d'Alzheimer
+Exemple court sur un sous-ensemble du jeu Kaggle.
+
+Pour l'entraînement complet, utiliser main.py.
+--max-per-class ici ne sert qu'à vérifier que le chargement fonctionne.
 """
 
-import numpy as np
-from data_preprocessing import MedicalImagePreprocessor
-from models.cnn_models import SimpleCNN, compile_model
-from models.transfer_learning import TransferLearningModel, compile_transfer_model
-from training import ModelTrainer, calculate_class_weights
+import matplotlib
+matplotlib.use("Agg")
+
+from data_loader import (
+    collect_samples,
+    download_dataset,
+    find_image_root,
+    make_dataset,
+    split_samples,
+)
 from evaluation import ModelEvaluator
+from models.cnn_models import SimpleCNN, compile_model
+from training import ModelTrainer, calculate_class_weights
 from utils import get_class_names, set_seed
-from sklearn.model_selection import train_test_split
 
 
-def example_classification():
+def example_classification(max_per_class: int = 32, epochs: int = 2):
     """
-    Exemple d'entraînement d'un modèle de classification
+    Entraîne SimpleCNN sur un petit échantillon réel du jeu Kaggle.
     """
-    print("="*60)
-    print("EXEMPLE: Classification avec SimpleCNN")
-    print("="*60)
-    
+    print("=" * 60)
+    print("EXEMPLE: SimpleCNN sur un extrait du jeu Kaggle")
+    print("=" * 60)
+
     set_seed(42)
-    
-    input_shape = (224, 224, 1)
-    num_samples = 200
-    
-    print("\n1. Génération de données d'exemple...")
-    X = np.random.rand(num_samples, *input_shape).astype(np.float32)
-    y = np.random.randint(0, 4, size=num_samples)
-    
-    print(f"   Forme des données: {X.shape}")
-    print(f"   Distribution des classes: {np.bincount(y)}")
-    
-    print("\n2. Prétraitement des données...")
-    preprocessor = MedicalImagePreprocessor(target_size=(224, 224))
-    X_processed = []
-    for i in range(len(X)):
-        processed = preprocessor.preprocess_single_image(X[i])
-        X_processed.append(processed)
-    X_processed = np.array(X_processed)
-    X_processed = np.expand_dims(X_processed, axis=-1)
-    
-    print("\n3. Division train/validation/test...")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_processed, y, test_size=0.2, random_state=42, stratify=y
+    image_size = 128
+    input_shape = (image_size, image_size, 3)
+
+    print("\n1. Téléchargement du jeu...")
+    image_root = find_image_root(download_dataset())
+
+    print("\n2. Échantillon et découpage...")
+    paths, labels = collect_samples(image_root, max_per_class=max_per_class, seed=42)
+    splits = split_samples(paths, labels, seed=42)
+
+    train_ds = make_dataset(*splits["train"], image_size=image_size, batch_size=16, shuffle=True)
+    val_ds = make_dataset(*splits["val"], image_size=image_size, batch_size=16)
+    test_ds = make_dataset(*splits["test"], image_size=image_size, batch_size=16)
+
+    print("\n3. Construction et entraînement de SimpleCNN...")
+    model = compile_model(SimpleCNN.build(input_shape, num_classes=len(get_class_names())))
+    class_weights = calculate_class_weights(splits["train"][1])
+    trainer = ModelTrainer(model, "example_simple_cnn")
+    trainer.train(
+        train_ds,
+        X_val=val_ds,
+        epochs=epochs,
+        class_weights=class_weights,
+        patience=2,
     )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
-    )
-    
-    print(f"   Train: {X_train.shape}, Validation: {X_val.shape}, Test: {X_test.shape}")
-    
-    print("\n4. Construction du modèle...")
-    model = compile_model(SimpleCNN.build(input_shape, num_classes=4))
-    
-    print("\n5. Entraînement...")
-    class_weights = calculate_class_weights(y_train)
-    trainer = ModelTrainer(model, 'example_simple_cnn')
-    history = trainer.train(
-        X_train, y_train, X_val, y_val,
-        batch_size=16,
-        epochs=10,
-        class_weights=class_weights
-    )
-    
-    print("\n6. Évaluation...")
-    y_pred = model.predict(X_test).argmax(axis=1)
-    y_pred_proba = model.predict(X_test)
-    
+
+    print("\n4. Évaluation sur le test...")
+    y_true = []
+    y_pred = []
+    for images, batch_labels in test_ds:
+        probabilities = model.predict(images, verbose=0)
+        y_true.extend(batch_labels.numpy().tolist())
+        y_pred.extend(probabilities.argmax(axis=1).tolist())
+
     evaluator = ModelEvaluator(get_class_names())
-    metrics = evaluator.calculate_metrics(y_test, y_pred, y_pred_proba)
-    
-    print("\nRésultats:")
+    metrics = evaluator.calculate_metrics(y_true, y_pred)
     for metric, value in metrics.items():
         print(f"  {metric}: {value:.4f}")
-    
-    print("\n7. Visualisation...")
-    evaluator.plot_confusion_matrix(y_test, y_pred, 
-                                   save_path='results/figures/example_confusion_matrix.png')
-    
-    print("\nExemple terminé avec succès!")
 
-
-def example_transfer_learning():
-    """
-    Exemple d'utilisation du transfer learning avec VGG16
-    """
-    print("="*60)
-    print("EXEMPLE: Transfer Learning avec VGG16")
-    print("="*60)
-    
-    set_seed(42)
-    
-    input_shape = (224, 224, 3)
-    num_samples = 200
-    
-    print("\n1. Génération de données d'exemple...")
-    X = np.random.rand(num_samples, *input_shape).astype(np.float32)
-    y = np.random.randint(0, 4, size=num_samples)
-    
-    print("\n2. Division train/validation...")
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    evaluator.plot_confusion_matrix(
+        y_true,
+        y_pred,
+        save_path="results/figures/example_confusion_matrix.png",
     )
-    
-    print("\n3. Construction du modèle VGG16...")
-    model = compile_transfer_model(
-        TransferLearningModel.build_vgg16(input_shape, num_classes=4, freeze_base=True)
-    )
-    
-    print("\n4. Entraînement...")
-    trainer = ModelTrainer(model, 'example_vgg16')
-    history = trainer.train(
-        X_train, y_train, X_val, y_val,
-        batch_size=16,
-        epochs=5
-    )
-    
-    print("\n5. Évaluation...")
-    y_pred = model.predict(X_val).argmax(axis=1)
-    evaluator = ModelEvaluator(get_class_names())
-    metrics = evaluator.calculate_metrics(y_val, y_pred)
-    
-    print("\nRésultats:")
-    for metric, value in metrics.items():
-        print(f"  {metric}: {value:.4f}")
-    
-    print("\nExemple terminé avec succès!")
+    print("\nExemple terminé. Lancer python main.py pour le jeu complet.")
 
 
-if __name__ == '__main__':
-    print("Choisissez un exemple à exécuter:")
-    print("1. Classification avec SimpleCNN")
-    print("2. Transfer Learning avec VGG16")
-    
-    choice = input("\nVotre choix (1 ou 2): ")
-    
-    if choice == '1':
-        example_classification()
-    elif choice == '2':
-        example_transfer_learning()
-    else:
-        print("Choix invalide. Exécution de l'exemple 1 par défaut.")
-        example_classification()
+if __name__ == "__main__":
+    example_classification()
 

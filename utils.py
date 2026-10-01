@@ -81,27 +81,22 @@ def save_predictions(y_pred: np.ndarray, y_pred_proba: np.ndarray,
 
 def get_class_mapping() -> Dict[int, str]:
     """
-    Retourne le mapping des classes
-    
-    Returns:
-        Dictionnaire {index: nom_classe}
+    Retourne le mapping des classes du jeu Kaggle utilisé par le projet.
+
+    L'ordre suit la sévérité clinique, pas l'ordre alphabétique des dossiers.
     """
-    return {
-        0: 'CN',
-        1: 'MCI',
-        2: 'AD',
-        3: 'EMCI'
-    }
+    from data_loader import CLASS_NAMES
+
+    return {index: name for index, name in enumerate(CLASS_NAMES)}
 
 
 def get_class_names() -> List[str]:
     """
-    Retourne la liste des noms de classes
-    
-    Returns:
-        Liste des noms de classes
+    Retourne la liste des noms de classes du jeu Kaggle.
     """
-    return ['CN', 'MCI', 'AD', 'EMCI']
+    from data_loader import CLASS_NAMES
+
+    return list(CLASS_NAMES)
 
 
 def print_model_summary(model):
